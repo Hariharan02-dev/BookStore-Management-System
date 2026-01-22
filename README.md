@@ -131,6 +131,4 @@ This project is developed for educational purposes and demonstrates:
 ---
 
 ## 🧠 Author
-****  
-Class 12 – Computer Science  
-CBSE
+🦇🙃
