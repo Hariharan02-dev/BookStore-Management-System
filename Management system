@@ -1,0 +1,399 @@
+import tkinter as tk
+from tkinter import messagebox, scrolledtext
+import mysql.connector
+from datetime import date
+import os
+from contextlib import contextmanager
+import hashlib
+
+# --- CONFIGURATION ---
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "your_password")
+DB_NAME = os.getenv("DB_NAME", "bookstore_db")
+
+# --- DATABASE CONNECTION CONTEXT MANAGER ---
+@contextmanager
+def get_db_connection():
+    """Context manager for database connections - ensures proper cleanup"""
+    conn = None
+    try:
+        conn = mysql.connector.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME
+        )
+        yield conn
+    except mysql.connector.Error as e:
+        if conn:
+            conn.rollback()
+        raise Exception(f"Database Error: {e}")
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
+
+# --- UTILITY FUNCTIONS ---
+def hash_password(password):
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def validate_input(value, field_name, input_type="str"):
+    """Validate and sanitize user input"""
+    if not value or (isinstance(value, str) and not value.strip()):
+        raise ValueError(f"{field_name} cannot be empty")
+    
+    if input_type == "float":
+        try:
+            return float(value)
+        except ValueError:
+            raise ValueError(f"{field_name} must be a valid number")
+    elif input_type == "int":
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"{field_name} must be a valid integer")
+    
+    return str(value).strip()
+
+# --- BOOK STORE GUI CLASS ---
+class BookStoreApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Book Store Management System")
+        self.root.geometry("950x650")
+        self.user = None
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Setup main dashboard UI"""
+        # --- MODULE A: ADD BOOKS ---
+        f1 = tk.LabelFrame(self.root, text=" Add New Book ")
+        f1.grid(row=0, column=0, padx=10, pady=10, sticky="n")
+        
+        tk.Label(f1, text="Title:").grid(row=0, column=0, sticky="w")
+        self.e_title = tk.Entry(f1)
+        self.e_title.grid(row=0, column=1)
+        
+        tk.Label(f1, text="Author:").grid(row=1, column=0, sticky="w")
+        self.e_author = tk.Entry(f1)
+        self.e_author.grid(row=1, column=1)
+        
+        tk.Label(f1, text="Price:").grid(row=2, column=0, sticky="w")
+        self.e_price = tk.Entry(f1)
+        self.e_price.grid(row=2, column=1)
+        
+        tk.Label(f1, text="Stock:").grid(row=3, column=0, sticky="w")
+        self.e_stock = tk.Entry(f1)
+        self.e_stock.grid(row=3, column=1)
+        
+        tk.Button(f1, text="Add Book", command=self.save_book, bg="#90EE90", width=15).grid(row=4, column=1, pady=5)
+        
+        # --- MODULE B: SELL & GENERATE BILL ---
+        f2 = tk.LabelFrame(self.root, text=" Sell Book ")
+        f2.grid(row=0, column=1, padx=10, pady=10, sticky="n")
+        
+        tk.Label(f2, text="Book ID:").grid(row=0, column=0, sticky="w")
+        self.e_book_id = tk.Entry(f2)
+        self.e_book_id.grid(row=0, column=1)
+        
+        tk.Label(f2, text="Qty:").grid(row=1, column=0, sticky="w")
+        self.e_qty = tk.Entry(f2)
+        self.e_qty.grid(row=1, column=1)
+        
+        tk.Button(f2, text="Sell & Bill", command=self.make_sale, bg="#ADD8E6", width=15).grid(row=2, column=1, pady=5)
+        
+        # --- MODULE C: DELETE BOOK ---
+        f3 = tk.LabelFrame(self.root, text=" Delete Book ")
+        f3.grid(row=0, column=2, padx=10, pady=10, sticky="n")
+        
+        tk.Label(f3, text="Book ID:").grid(row=0, column=0)
+        self.e_del_id = tk.Entry(f3, width=15)
+        self.e_del_id.grid(row=0, column=1)
+        
+        tk.Button(f3, text="Delete", command=self.delete_book, bg="#FFcccb", width=15).grid(row=1, column=1, pady=5)
+        
+        # --- SEARCH & DISPLAY AREA ---
+        search_frame = tk.Frame(self.root)
+        search_frame.grid(row=1, column=0, columnspan=3, pady=10)
+        
+        tk.Label(search_frame, text="Search Book Title: ").pack(side=tk.LEFT)
+        self.search_var = tk.Entry(search_frame)
+        self.search_var.pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(search_frame, text="Search", command=self.run_search, bg="yellow").pack(side=tk.LEFT)
+        tk.Button(search_frame, text="Show All", command=self.show_all_books, bg="white").pack(side=tk.LEFT, padx=5)
+        
+        # Display Text Area
+        self.txt = scrolledtext.ScrolledText(self.root, width=110, height=20)
+        self.txt.grid(row=2, column=0, columnspan=3, padx=10)
+        
+        # Load initial data
+        self.load_data("")
+    
+    def save_book(self):
+        """Add a new book to the database"""
+        try:
+            title = validate_input(self.e_title.get(), "Title")
+            author = validate_input(self.e_author.get(), "Author")
+            price = validate_input(self.e_price.get(), "Price", "float")
+            stock = validate_input(self.e_stock.get(), "Stock", "int")
+            
+            if price <= 0:
+                raise ValueError("Price must be greater than 0")
+            if stock < 0:
+                raise ValueError("Stock cannot be negative")
+            
+            with get_db_connection() as db:
+                cursor = db.cursor()
+                sql = "INSERT INTO books (title, author, price, stock) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql, (title, author, price, stock))
+                db.commit()
+                cursor.close()
+            
+            messagebox.showinfo("Success", "Book Added Successfully!")
+            self.e_title.delete(0, 'end')
+            self.e_author.delete(0, 'end')
+            self.e_price.delete(0, 'end')
+            self.e_stock.delete(0, 'end')
+            self.load_data("")
+            
+        except ValueError as e:
+            messagebox.showerror("Validation Error", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add book: {str(e)}")
+    
+    def make_sale(self):
+        """Process book sale and generate bill"""
+        try:
+            book_id = validate_input(self.e_book_id.get(), "Book ID", "int")
+            quantity = validate_input(self.e_qty.get(), "Quantity", "int")
+            
+            if quantity <= 0:
+                raise ValueError("Quantity must be greater than 0")
+            
+            with get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT stock, price, title FROM books WHERE book_id=%s", (book_id,))
+                record = cursor.fetchone()
+                
+                if not record:
+                    messagebox.showerror("Error", "Book ID not found")
+                    cursor.close()
+                    return
+                
+                current_stock, price, title = record
+                
+                if current_stock < quantity:
+                    messagebox.showerror("Stock Error", f"Only {current_stock} units available in stock")
+                    cursor.close()
+                    return
+                
+                # Update stock and record sale
+                new_stock = current_stock - quantity
+                total_amount = price * quantity
+                today = date.today()
+                
+                try:
+                    cursor.execute("UPDATE books SET stock=%s WHERE book_id=%s", (new_stock, book_id))
+                    cursor.execute(
+                        "INSERT INTO book_sales(book_id, quantity_sold, sale_date) VALUES (%s, %s, %s)",
+                        (book_id, quantity, today)
+                    )
+                    db.commit()
+                except mysql.connector.Error as e:
+                    db.rollback()
+                    raise Exception(f"Transaction failed: {e}")
+                finally:
+                    cursor.close()
+                
+                # Generate and display bill
+                self.show_bill(book_id, title, price, quantity, total_amount, today)
+                
+                # Clear inputs and refresh
+                self.e_book_id.delete(0, 'end')
+                self.e_qty.delete(0, 'end')
+                self.load_data("")
+        
+        except ValueError as e:
+            messagebox.showerror("Validation Error", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Sale failed: {str(e)}")
+    
+    def show_bill(self, book_id, title, price, quantity, total, today):
+        """Display bill in a new window"""
+        bill_content = f"""
+    *************************************
+          BOOK STORE RECEIPT      
+    *************************************
+    Date: {today}
+    Invoice No: #INV-{book_id}-{quantity}
+    
+    Item Details:
+    -------------------------------------
+    Book  : {title}
+    Price : Rs. {price:.2f}
+    Qty   : {quantity}
+    -------------------------------------
+    
+    TOTAL AMOUNT : Rs. {total:.2f}
+    
+    *************************************
+         Thank you for shopping!
+    *************************************
+        """
+        
+        bill_win = tk.Toplevel(self.root)
+        bill_win.title("Payment Receipt")
+        bill_win.geometry("400x500")
+        bill_win.configure(bg="white")
+        
+        lbl_bill = tk.Text(bill_win, font=("Courier New", 12), bg="white", relief="flat")
+        lbl_bill.insert("1.0", bill_content)
+        lbl_bill.config(state="disabled")
+        lbl_bill.pack(padx=10, pady=10, fill="both", expand=True)
+        
+        btn_frame = tk.Frame(bill_win, bg="white")
+        btn_frame.pack(pady=10)
+        
+        tk.Button(btn_frame, text="Save Bill", command=lambda: self.save_bill_to_file(bill_content, book_id, today), 
+                  bg="#4CAF50", fg="white", width=15).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Close", command=bill_win.destroy, bg="#f44336", fg="white", width=10).pack(side=tk.LEFT, padx=5)
+    
+    def save_bill_to_file(self, content, book_id, today):
+        """Save bill to a text file"""
+        try:
+            filename = f"Bill_{book_id}_{today}.txt"
+            with open(filename, "w") as f:
+                f.write(content)
+            messagebox.showinfo("Saved", f"Bill saved successfully!\nFile: {filename}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save bill: {str(e)}")
+    
+    def delete_book(self):
+        """Delete a book from the database"""
+        try:
+            book_id = validate_input(self.e_del_id.get(), "Book ID", "int")
+            
+            if not messagebox.askyesno("Confirm", f"Delete Book ID {book_id}?"):
+                return
+            
+            with get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("DELETE FROM books WHERE book_id=%s", (book_id,))
+                db.commit()
+                
+                if cursor.rowcount == 0:
+                    messagebox.showwarning("Not Found", "Book ID not found in database")
+                else:
+                    messagebox.showinfo("Deleted", "Book record removed successfully")
+                
+                cursor.close()
+            
+            self.e_del_id.delete(0, 'end')
+            self.load_data("")
+        
+        except ValueError as e:
+            messagebox.showerror("Validation Error", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete book: {str(e)}")
+    
+    def run_search(self):
+        """Search books by title"""
+        keyword = self.search_var.get()
+        self.load_data(keyword)
+    
+    def show_all_books(self):
+        """Show all books"""
+        self.search_var.delete(0, 'end')
+        self.load_data("")
+    
+    def load_data(self, filter_word):
+        """Load and display books from database"""
+        try:
+            with get_db_connection() as db:
+                cursor = db.cursor()
+                
+                if filter_word == "":
+                    cursor.execute("SELECT * FROM books")
+                else:
+                    cursor.execute("SELECT * FROM books WHERE title LIKE %s", (f"%{filter_word}%%",))
+                
+                data = cursor.fetchall()
+                cursor.close()
+            
+            self.txt.config(state="normal")
+            self.txt.delete('1.0', 'end')
+            
+            header = "{:<5} {:<30} {:<20} {:<10} {:<10}\n".format("ID", "Title", "Author", "Price", "Stock")
+            self.txt.insert('end', header)
+            self.txt.insert('end', "="*90 + "\n")
+            
+            for row in data:
+                row_str = "{:<5} {:<30} {:<20} {:<10} {:<10}\n".format(row[0], row[1], row[2], row[3], row[4])
+                self.txt.insert('end', row_str)
+            
+            self.txt.config(state="disabled")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load data: {str(e)}")
+
+# --- LOGIN WINDOW CLASS ---
+class LoginWindow:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("System Login")
+        self.root.geometry("300x200")
+        self.setup_login_ui()
+    
+    def setup_login_ui(self):
+        """Setup login screen UI"""
+        tk.Label(self.root, text="BOOKSTORE ADMIN", font=("Arial", 14, "bold")).pack(pady=10)
+        
+        f_log = tk.Frame(self.root)
+        f_log.pack()
+        
+        tk.Label(f_log, text="User:").grid(row=0, column=0, pady=5)
+        self.user_entry = tk.Entry(f_log)
+        self.user_entry.grid(row=0, column=1)
+        
+        tk.Label(f_log, text="Pass:").grid(row=1, column=0, pady=5)
+        self.pass_entry = tk.Entry(f_log, show="*")
+        self.pass_entry.grid(row=1, column=1)
+        
+        tk.Button(self.root, text="LOGIN", command=self.login_check, width=15, bg="silver").pack(pady=20)
+    
+    def login_check(self):
+        """Verify user credentials"""
+        try:
+            username = validate_input(self.user_entry.get(), "Username")
+            password = validate_input(self.pass_entry.get(), "Password")
+            
+            with get_db_connection() as db:
+                cursor = db.cursor()
+                hashed_pwd = hash_password(password)
+                cursor.execute(
+                    "SELECT * FROM users WHERE username=%s AND password=%s",
+                    (username, hashed_pwd)
+                )
+                result = cursor.fetchone()
+                cursor.close()
+            
+            if result:
+                self.root.destroy()
+                main_win = tk.Tk()
+                BookStoreApp(main_win)
+                main_win.mainloop()
+            else:
+                messagebox.showerror("Login Failed", "Invalid username or password")
+        
+        except ValueError as e:
+            messagebox.showerror("Validation Error", str(e))
+        except Exception as e:
+            messagebox.showerror("Connection Error", f"Error: {str(e)}\nCheck MySQL connection and environment variables!")
+
+# --- MAIN ENTRY POINT ---
+if __name__ == "__main__":
+    root = tk.Tk()
+    LoginWindow(root)
+    root.mainloop()
